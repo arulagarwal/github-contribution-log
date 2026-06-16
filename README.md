@@ -6,7 +6,7 @@
 
 **Issue:** [skiptools/skip-ui#146](https://github.com/skiptools/skip-ui/issues/146)
 
-**Status:** Phase I Complete
+**Status:** Phase II Complete
 
 ---
 
@@ -42,20 +42,36 @@ The `.colorset` asset parsing logic, likely located within the resource handling
 
 ### Environment Setup
 
-*[To be completed in Phase II]*
+Configured the local macOS environment and synced the repository.
+
+```bash
+cd /Users/arulagarwal/Documents/CodePath/AI301
+git clone https://github.com/arulagarwal/skip-ui.git
+cd skip-ui
+git remote add upstream https://github.com/skiptools/skip-ui.git
+git fetch upstream
+git checkout main
+git merge --ff-only upstream/main
+git checkout -b fix-issue-146-hex-colors
+git push -u origin fix-issue-146-hex-colors
+
+```
+
+Working branch: [https://github.com/arulagarwal/skip-ui/tree/fix-issue-146-hex-colors](https://www.google.com/search?q=https://github.com/arulagarwal/skip-ui/tree/fix-issue-146-hex-colors)
 
 ### Steps to Reproduce
 
-1. Create a new Xcode project and add a custom color to the `.xcassets` folder.
-2. In the Attributes Inspector, change the Input Method to "8-bit hexadecimal" and set a hex value.
-3. Run the Skip translation process on the module.
-4. *[Observe the parser failure or missing color in the resulting Android build]*
+1. Open `skip-ui` and navigate to the test resources directory (`Tests/SkipUITests/Resources/Assets.xcassets`).
+2. Create a dummy `HexColor.colorset` directory.
+3. Add a `Contents.json` file structured with the Xcode "8-bit hexadecimal" input method (e.g., using `"value": "#0xF1"` instead of nested float components).
+4. Run the SkipUI test suite against this asset: `swift test --filter ColorTests`
+5. **Expected:** The colorset parses correctly and renders the intended color.
+6. **Actual:** The resulting color output silently renders as pure black.
 
 ### Reproduction Evidence
 
-* **Commit showing reproduction:** [Link to commit in your fork]
-* **Screenshots/logs:** [If applicable]
-* **My findings:** [What you discovered during reproduction]
+* **Commit showing reproduction:** [fix-issue-146-hex-colors](https://www.google.com/search?q=https://github.com/arulagarwal/skip-ui/tree/fix-issue-146-hex-colors)
+* **My findings:** This is a silent failure, not a hard crash. JSON decoding succeeds because the dictionary shape is valid. However, the string-to-Double conversion fails at `Sources/SkipUI/SkipUI/Color/Color.swift:625-631`. When `Double("0xF1")` returns `nil`, the `?? 0.0` fallback kicks in, causing every custom hex colorset to silently render as pure black.
 
 ---
 
@@ -63,32 +79,48 @@ The `.colorset` asset parsing logic, likely located within the resource handling
 
 ### Analysis
 
-*[To be completed in Phase II - Will detail the specific JSON parsing structures failing]*
+The root cause is a value-level parse failure, not a JSON-shape mismatch. The float method and 8-bit hex method produce the identical `components` dictionary of string channels.
+
+* *Float method:* `"red": "0.016"` → `Double()` succeeds.
+* *Hex method:* `"red": "0x04"` → `Double("0x04")` is `nil`.
+
+Because no error is thrown, the `do/catch` block handling asset colors does not catch it; the bug surfaces only as wrong pixels (black). Hex channels are 8-bit integers (`0...255`) and must be normalized (`/255.0`), whereas float channels are already `0...1`.
 
 ### Proposed Solution
 
-*[To be completed in Phase II - High-level description of adding conditional decoding logic]*
+Implement conditional decoding logic by adding a parsing helper that attempts the standard floating-point conversion first. If it encounters a hex-formatted string instead, it will parse the 8-bit integer, normalize it, and return the proper float value.
 
 ### Implementation Plan
 
 Using UMPIRE framework (adapted):
 
-**Understand:** The `Contents.json` parser crashes or ignores hexadecimal color representations.
+**Understand:** The parser is failing at the value-conversion level (`Double("0xF1")` returns `nil`). Detection must evaluate token shape, and the float path must be attempted first so existing decimal colorsets remain unaffected.
 
-**Match:** *[Look for existing hex-parsing logic or alternative JSON decoding strategies in the Skip codebase]*
+**Match:** There is no existing hex-parsing utility in the codebase (hardcoded literals exist as compile-time integers). The "try one form, fall back" pattern exists at the shape level (`do { decode } catch { … }`). We will apply this pattern at the value level.
 
 **Plan:**
 
-1. Locate the Swift struct/class responsible for decoding `.colorset` JSON.
-2. Update the `Decodable` implementation to attempt decoding the float dictionary first, and fall back to the hex string if the first attempt fails.
-3. Write a helper to convert the 8-bit hex string into the underlying color object Skip uses.
-4. Add unit tests with dummy `Contents.json` data containing hex values.
+1. Add a parsing helper on `ColorComponents` (in `Color.swift`, ~line 619) that tries the float form first and falls back to hex with `/255` normalization. Keep the default values exactly as today.
+2. Route the channels through the helper in the `color` computed property, replacing the bare `Double(...) ?? default` calls.
+3. Expose the pure logic for a fast unit test (e.g., lifting the helper to a `fileprivate`/`internal` free function).
+4. Add a `.colorset` fixture under `Tests/SkipUITests/Resources/Assets.xcassets/HexColor.colorset/Contents.json` using 8-bit hex values for an integration/snapshot test.
 
-**Implement:** *[Link to your branch/commits as you work]*
+**Implement:** Code changes will be committed to the `fix-issue-146-hex-colors` branch.
 
-**Review:** *[Self-review checklist - does it follow the project's contribution guidelines?]*
+**Review:**
 
-**Evaluate:** *[How will you verify it works?]*
+* [ ] Float colorsets unchanged (float path hit before hex).
+* [ ] Default values (`alpha: 1.0`, `rgb: 0.0`) and `nil`/empty inputs preserved.
+* [ ] Hex bytes normalized by `/255.0`.
+* [ ] Both `0x`/`0X` and `#` prefixes handled; malformed hex falls back to default.
+* [ ] APIs used are Skip-transpilable on both Swift and transpiled Kotlin.
+
+**Evaluate:**
+
+* Float regression test: `parseComponent("0.016")` returns the same Double as before.
+* Hex correctness test: `parseComponent("0xF1")` ≈ `0.945`.
+* Edge cases: `"#F1"` parses; empty/`nil`/malformed fallback to default.
+* Integration/snapshot: Render a `HexColor.colorset` fixture via `render(...).pixmap`.
 
 ---
 
@@ -103,7 +135,7 @@ Using UMPIRE framework (adapted):
 ### Integration Tests
 
 * [ ] Integration scenario 1: Verify the translated Compose Multiplatform code reflects the correct hex color.
-* [ ] Integration scenario 2
+* [ ] Integration scenario 2: Render a mock UI component utilizing a hex-based colorset.
 
 ### Manual Testing
 
@@ -115,7 +147,7 @@ Using UMPIRE framework (adapted):
 
 ### Week 2 Progress
 
-*[To be filled]*
+Set up local development environment, created a feature branch, and successfully reproduced the parser failure by adding a dummy hex `.colorset` to the testing resources. Drafted the UMPIRE solution plan to update the JSON decoding logic. All documentation is being tracked and pushed to arulagarwal/github-contribution-log_2.
 
 ### Week 3 Progress
 
@@ -162,5 +194,5 @@ Using UMPIRE framework (adapted):
 
 ## Resources Used
 
-* [Skip UI Documentation](https://skip.tools/)
-* [Apple Developer Documentation: Color Set Type](https://www.google.com/search?q=https://developer.apple.com/documentation/xcode/color-set-type)
+* [Skip UI Documentation](https://www.google.com/search?q=https%3A%2F%2Fskip.tools%2F)
+* [Apple Developer Documentation: Color Set Type](https://www.google.com/search?q=https%3A%2F%2Fwww.google.com%2Fsearch%3Fq%3Dhttps%3A%2F%2Fdeveloper.apple.com%2Fdocumentation%2Fxcode%2Fcolor-set-type)
