@@ -6,7 +6,7 @@
 
 **Issue:** [skiptools/skip-ui#146](https://github.com/skiptools/skip-ui/issues/146)
 
-**Status:** Phase III Complete — fix implemented, tested, and committed; pull request pending (Phase IV)
+**Status:** Phase IV — PR [#468](https://github.com/skiptools/skip-ui/pull/468) open and awaiting maintainer review (CI ✅, CLA ✅)
 
 ---
 
@@ -57,21 +57,20 @@ git push -u origin fix-issue-146-hex-colors
 
 ```
 
-Working branch: [https://github.com/arulagarwal/skip-ui/tree/fix-issue-146-hex-colors](https://www.google.com/search?q=https://github.com/arulagarwal/skip-ui/tree/fix-issue-146-hex-colors)
+Working branch: [fix-issue-146-hex-colors](https://github.com/arulagarwal/skip-ui/tree/fix-issue-146-hex-colors)
 
 ### Steps to Reproduce
 
 1. Open `skip-ui` and navigate to the test resources directory (`Tests/SkipUITests/Resources/Assets.xcassets`).
 2. Create a dummy `HexColor.colorset` directory.
-3. Add a `Contents.json` file structured with the Xcode "8-bit hexadecimal" input method (e.g., using `"value": "#0xF1"` instead of nested float components).
-4. Run the SkipUI test suite against this asset: `swift test --filter ColorTests`
+3. Add a `Contents.json` file structured with the Xcode "8-bit hexadecimal" input method — the same nested `components` object, but with hex byte strings like `"red": "0x94"` instead of float strings. *[Revised in Phase III: an earlier draft assumed a single `value` key; the JSON shape is unchanged — see Plan Revisions.]*
+4. Run the SkipUI test suite on the Android side: `skip test --filter ColorTests`. *[Revised in Phase III: the bug is Android-only, so `swift test` does not reproduce it — see Plan Revisions.]*
 5. **Expected:** The colorset parses correctly and renders the intended color.
 6. **Actual:** The resulting color output silently renders as pure black.
 
 ### Reproduction Evidence
 
-* **Commit showing reproduction:** [fix-issue-146-hex-colors](https://www.google.com/search?q=https://github.com/arulagarwal/skip-ui/tree/fix-issue-146-hex-colors)
-* **My findings:** This is a silent failure, not a hard crash. JSON decoding succeeds because the dictionary shape is valid. However, the string-to-Double conversion fails at `Sources/SkipUI/SkipUI/Color/Color.swift:625-631`. When `Double("0xF1")` returns `nil`, the `?? 0.0` fallback kicks in, causing every custom hex colorset to silently render as pure black.
+* **My findings:** This is a silent failure, not a hard crash. JSON decoding succeeds because the dictionary shape is valid. The failure is in the string→Double conversion inside `ColorComponents`: on the transpiled Kotlin path `Double("0xF1")` returns `null`, the `?? 0.0` fallback kicks in, and every custom hex colorset silently renders pure black.
 
 ---
 
@@ -82,13 +81,13 @@ Working branch: [https://github.com/arulagarwal/skip-ui/tree/fix-issue-146-hex-c
 The root cause is a value-level parse failure, not a JSON-shape mismatch. The float method and 8-bit hex method produce the identical `components` dictionary of string channels.
 
 * *Float method:* `"red": "0.016"` → `Double()` succeeds.
-* *Hex method:* `"red": "0x04"` → `Double("0x04")` is `nil`.
+* *Hex method:* `"red": "0x04"` → fails on Kotlin (`toDoubleOrNull` → `null`).
 
 Because no error is thrown, the `do/catch` block handling asset colors does not catch it; the bug surfaces only as wrong pixels (black). Hex channels are 8-bit integers (`0...255`) and must be normalized (`/255.0`), whereas float channels are already `0...1`.
 
 ### Proposed Solution
 
-Implement conditional decoding logic by adding a parsing helper that attempts the standard floating-point conversion first. If it encounters a hex-formatted string instead, it will parse the 8-bit integer, normalize it, and return the proper float value.
+Implement conditional decoding logic by adding a parsing helper that attempts the standard floating-point conversion first. If it encounters a hex-formatted string instead, it will parse the 8-bit integer, normalize it, and return the proper float value. *[Revised in Phase III: the final design detects the `0x`/`0X`/`#` prefix **first** rather than float-first — `Double("0xF1")` is `241.0` in Swift but `null` in Kotlin, so float-first is a parity bug. See Plan Revisions.]*
 
 ### Implementation Plan
 
@@ -182,19 +181,24 @@ Key revisions made as the plan met reality (all detailed under Challenges): (1) 
 
 ## Pull Request
 
-**PR Link:** *To be added when opened against `skiptools/skip-ui` (Phase IV).*
+**PR Link:** [skiptools/skip-ui#468](https://github.com/skiptools/skip-ui/pull/468) — open against upstream `main`.
 
 **Branch:** [`fix-issue-146-hex-colors`](https://github.com/arulagarwal/skip-ui/tree/fix-issue-146-hex-colors)
 
 **Summary:** Routes each `.colorset` channel through a new `parseColorComponent` helper so **all three of Xcode's numeric Input Methods** (floating point, 8-bit hexadecimal `0xF1`/`#F1`, and 8-bit 0-255) parse correctly — instead of hex falling back to `0.0` (black) on Android. Adds hex/float/8-bit fixtures and `#if SKIP` render tests. `Closes #146`.
 
-**Status:** Implemented & verified locally — `swift test` and `skip test` (Robolectric) both green (Phase III complete); PR submission pending (Phase IV).
+**Status:** **Awaiting review.** PR is open against upstream `main`; `skip-framework` CI ✅ green; `verification/cla-signed` ✅ (username added to Skip's `.clabot` via [clabot-config#71](https://github.com/skiptools/clabot-config/pull/71)); mergeable with no conflicts.
+
+**Review requested:** surfaced the PR to the issue author/maintainer **@marcprux** in a comment on [#146](https://github.com/skiptools/skip-ui/issues/146) (2026-06-23), summarizing the change and noting CI + CLA are green; awaiting response.
+
+**Related PR:** A second CodePath contributor independently opened [#471](https://github.com/skiptools/skip-ui/pull/471) for the same issue. It handles the `0x` hexadecimal case only; #468 additionally covers the `#` and **8-bit (0–255)** Input Methods and ships fixtures + render tests.
 
 **Maintainer Feedback Log:**
 
-| Date | Feedback | My Response | Commit |
-|------|----------|-------------|--------|
-| _(pending first review)_ | | | |
+| Date | Feedback | My Response | Commit / Ref |
+|------|----------|-------------|--------------|
+| 2026-06-22 | `cla-bot`: `@arulagarwal` not on file — `verification/cla-signed` failing | Added my username to Skip's `.clabot` via clabot-config#71; after it merged, re-ran `@cla-bot check` → CLA now ✅ | clabot-config#71 |
+| _(awaiting first human review)_ | | | |
 
 ---
 
@@ -212,6 +216,7 @@ Key revisions made as the plan met reality (all detailed under Challenges): (1) 
 * Corrected a wrong reproduction assumption (the bug is Android-only, not reproducible via `swift test`).
 * Avoided a subtle parity bug by choosing prefix-first detection over the seemingly-simpler float-first fallback, after empirically confirming Swift vs. Kotlin string-parsing differences.
 * Worked within the project's testing conventions (no `@testable`) by validating the fix through render tests plus a standalone logic harness.
+* Navigated the full open-source submission flow: the project's CLA gate (added my username to Skip's `.clabot` via clabot-config#71, then re-ran `@cla-bot check` to clear the failing check), keeping the branch rebased on upstream `main`, and seeing a parallel PR (#471) from another contributor for the same issue — which reinforced the value of shipping a *complete*, well-tested PR (all Input Methods + fixtures) rather than the minimum.
 
 ### What I'd Do Differently Next Time
 
@@ -223,5 +228,5 @@ Key revisions made as the plan met reality (all detailed under Challenges): (1) 
 
 ## Resources Used
 
-* [Skip UI Documentation](https://www.google.com/search?q=https%3A%2F%2Fskip.tools%2F)
-* [Apple Developer Documentation: Color Set Type](https://www.google.com/search?q=https%3A%2F%2Fwww.google.com%2Fsearch%3Fq%3Dhttps%3A%2F%2Fdeveloper.apple.com%2Fdocumentation%2Fxcode%2Fcolor-set-type)
+* [Skip Documentation](https://skip.tools/)
+* [Apple Developer Documentation: Color Set Type](https://developer.apple.com/documentation/xcode/color-set-type)
